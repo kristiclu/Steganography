@@ -1,2 +1,2 @@
 # Steganography
-We are given two pictures, and we will use and discuss steganography methods on the example. 
+Discussion of embedding watermark image "IVAN" into host image "picture" while discussing methods od watermarking.
