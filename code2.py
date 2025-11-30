@@ -196,7 +196,7 @@ def depermute_watermark(wm_perm, key):
     return original_flat.reshape(wm_perm.shape)
 
 
-# (8) + (9 )
+# (8) + (9)
 def embed_watermark_in_fbr_U(fbr, wm, block_size=8, alpha=0.1):
     H = fbr.shape[0]
 
@@ -342,11 +342,14 @@ if __name__ == "__main__":
     # ---- INPUT FILES ----
     host_path = "picture.png"
     wm_path   = "ivan.png"
-    
+    secret_key = "my_secret_key_123"  # used for permutation
+
+    # ---- PARAMETERS ----
     block_size = 8
     T = 5.0
     alpha = 0.1
 
+    # ---- LOAD IMAGES ----
     host = load_grayscale_image(host_path)
     wm_original = load_grayscale_image(wm_path)
 
@@ -365,29 +368,35 @@ if __name__ == "__main__":
     )
     wm_resized = np.array(wm_resized_img)
 
+    # ---- PERMUTE WATERMARK (scrambling with secret key) ----
     wm_perm = permute_watermark(wm_resized, secret_key)
 
+    # ---- EMBEDDING ----
     ftl_w = embed_watermark_in_ftl(ftl, wm_perm, block_size, T=T)
     fbr_w = embed_watermark_in_fbr_U(fbr, wm_perm, block_size, alpha=alpha)
 
     watermarked_host = combine_subimages(ftl_w, ftr, fbl, fbr_w)
     save_grayscale_image(watermarked_host, "host_watermarked.png")
 
+    # ---- EXTRACTION FROM WATERMARKED IMAGE ----
     F = load_grayscale_image("host_watermarked.png")
     ftlw_ex, ftr_w_ex, fbl_w_ex, fbrw_ex = partition_host_image(F)
 
-    # From D matrix (top-left)
+    # ====== EXTRACTION FROM D (top-left) ======
     wm_bits_D, wm_img_D_perm = extract_watermark_from_ftlw(ftlw_ex, block_size, T=T)
+
+    # de-permute to restore original watermark order
     wm_img_D_deperm = depermute_watermark(wm_bits_D, secret_key)
     wm_img_D_deperm = (wm_img_D_deperm * 255).astype(np.uint8)
 
-    save_grayscale_image(wm_img_D_perm,   "extracted_from_D_perm.png")
-    save_grayscale_image(wm_img_D_deperm, "extracted_from_D.png")
+    save_grayscale_image(wm_img_D_perm,   "extracted_from_D_perm.png")  # scrambled
+    save_grayscale_image(wm_img_D_deperm, "extracted_from_D.png")       # descrambled
 
-    # From U matrix (bottom-right)
+    # ====== EXTRACTION FROM U (bottom-right) ======
     wm_bits_U, wm_img_U_perm = extract_bits_from_fbrw_U(fbrw_ex, block_size)
+
     wm_img_U_deperm = depermute_watermark(wm_bits_U, secret_key)
     wm_img_U_deperm = (wm_img_U_deperm * 255).astype(np.uint8)
 
-    save_grayscale_image(wm_img_U_perm,   "extracted_from_U_perm.png")
-    save_grayscale_image(wm_img_U_deperm, "extracted_from_U.png")
+    save_grayscale_image(wm_img_U_perm,   "extracted_from_U_perm.png")  # scrambled
+    save_grayscale_image(wm_img_U_deperm, "extracted_from_U.png")       # descrambled
