@@ -1,6 +1,9 @@
+from matplotlib.cbook import flatten
 import numpy as np  # numerical arrays and matrix operations
 from PIL import Image  # image loading and saving
 
+
+#for preping images
 def load_grayscale_image(path):
     img = Image.open(path).convert("L")
     return np.array(img)
@@ -9,8 +12,10 @@ def save_grayscale_image(arr, path):
     img = Image.fromarray(arr.astype(np.uint8))
     img.save(path)
 
-#  IMAGE PARTITIONING
 
+#  A. Host Image Partition
+
+# (1) and (2)
 def partition_host_image(host_img):
     N = host_img.shape[0]
     half = N // 2
@@ -22,67 +27,28 @@ def partition_host_image(host_img):
 
     return ftl, ftr, fbl, fbr
 
-#  IMAGE COMBINATION
+#=========================
+#B. Watermark Embedding in D Matrix
+#=========================
 
-def combine_subimages(ftl_w, ftr, fbl, fbr_w):
-    half = ftl_w.shape[0]
-    N = half * 2
-    result = np.zeros((N, N), dtype=np.uint8)
+# (3) + (4)
+# we are doing SVD on blocks of ftl and collecting Dlarge
 
-    result[0:half,     0:half]   = ftl_w
-    result[0:half,     half:N]   = ftr
-    result[half:N,     0:half]   = fbl
-    result[half:N,     half:N]   = fbr_w
-
-    return result
-
-
-def _rng_from_key(key):
-    seed = abs(hash(key)) % (2**32)
-    return np.random.default_rng(seed)
-
-
-def permute_watermark(wm_img, key):
-    flat = wm_img.flatten()
-    num_pixels = flat.size
-
-    rng = _rng_from_key(key)
-    perm_indices = np.arange(num_pixels)
-    rng.shuffle(perm_indices)
-
-    perm_flat = flat[perm_indices]
-    return perm_flat.reshape(wm_img.shape)
-
-
-def depermute_watermark(wm_perm, key):
-    flat = wm_perm.flatten()
-    num_pixels = flat.size
-
-    rng = _rng_from_key(key)
-    perm_indices = np.arange(num_pixels)
-    rng.shuffle(perm_indices)
-
-    inv_perm = np.zeros_like(perm_indices)
-    inv_perm[perm_indices] = np.arange(num_pixels)
-
-    original_flat = flat[inv_perm]
-    return original_flat.reshape(wm_perm.shape)
-
-#  Embedding in D (S matrix of ftl)
 
 def svd_blocks_and_collect_Dlarge(ftl, block_size, wm_shape):
-    H = ftl.shape[0]
-    blocks_per_dim = H // block_size
-    num_blocks = blocks_per_dim * blocks_per_dim
+    H = ftl.shape[0] #number of rows
+    blocks_per_dim = H // block_size 
+    num_blocks = blocks_per_dim * blocks_per_dim #total number of blocks
 
-    U_list = []
+    # Lists to store U, S, Vt from SVD for each block
+    U_list = [] 
     S_list = []
     Vt_list = []
-    Dlarge_flat = np.zeros(num_blocks, dtype=float)
+    Dlarge_flat = np.zeros(num_blocks, dtype=float) #array to store largest singular values
 
     idx = 0
-    for by in range(blocks_per_dim):
-        for bx in range(blocks_per_dim):
+    for by in range(blocks_per_dim): #loop over block rows
+        for bx in range(blocks_per_dim): #loop over block columns
             y0 = by * block_size
             x0 = bx * block_size
             block = ftl[y0:y0+block_size, x0:x0+block_size].astype(float)
@@ -93,32 +59,39 @@ def svd_blocks_and_collect_Dlarge(ftl, block_size, wm_shape):
             S_list.append(S)
             Vt_list.append(Vt)
 
-            Dlarge_flat[idx] = S[0]
+            Dlarge_flat[idx] = S[0] #S is sorted in descending order, so it's the first element  
             idx += 1
 
-    Dlarge = Dlarge_flat.reshape(wm_shape)
+    Dlarge = Dlarge_flat.reshape(wm_shape)  #reshape to match watermark shape
     return U_list, S_list, Vt_list, Dlarge
 
+# (5) + (6)
 
 def modify_Dlarge_with_watermark(Dlarge, wm_bits, T):
     dmin = Dlarge.min()
     dmax = Dlarge.max()
 
-    Dlarge_flat = Dlarge.flatten()
+    Dlarge_flat = Dlarge.flatten() #convert to 1D for easier processing
     wm_flat = wm_bits.flatten()
-    modified_flat = np.zeros_like(Dlarge_flat, dtype=float)
+    modified_flat = np.zeros_like(Dlarge_flat, dtype=float) 
 
     num_bins = int(np.ceil((dmax - dmin) / T))
 
+
+# flatten + single loop --> faster
     for i, d in enumerate(Dlarge_flat):
         bit = wm_flat[i]
 
+        # Determine bin index
         bin_idx = int((d - dmin) // T)
+
+        # check bounds
         if bin_idx < 0:
             bin_idx = 0
         if bin_idx >= num_bins:
             bin_idx = num_bins - 1
 
+        # Calculate bin boundaries
         d_low = dmin + bin_idx * T
         d_high = d_low + T
         mid = 0.5 * (d_low + d_high)
@@ -134,6 +107,33 @@ def modify_Dlarge_with_watermark(Dlarge, wm_bits, T):
 
     return modified_flat.reshape(Dlarge.shape)
 
+
+def embed_watermark_in_ftl(ftl, wm, block_size=8, T=5.0):
+    wm_bits = (wm // 255).astype(np.uint8)
+
+    U_list, S_list, Vt_list, Dlarge = svd_blocks_and_collect_Dlarge(
+        ftl, block_size, wm_bits.shape
+    )
+    Dlarge_modified = modify_Dlarge_with_watermark(Dlarge, wm_bits, T)
+
+    ftl_w = reconstruct_ftl_from_svd(
+        U_list, S_list, Vt_list, Dlarge_modified, block_size, ftl.shape
+    )
+    return ftl_w
+
+def combine_subimages(ftl_w, ftr, fbl, fbr_w):
+    half = ftl_w.shape[0]
+    N = half * 2
+    result = np.zeros((N, N), dtype=np.uint8)
+
+    result[0:half,     0:half]   = ftl_w
+    result[0:half,     half:N]   = ftr
+    result[half:N,     0:half]   = fbl
+    result[half:N,     half:N]   = fbr_w
+
+    return result
+
+# (7)
 
 def reconstruct_ftl_from_svd(U_list, S_list, Vt_list, Dlarge_modified, block_size, ftl_shape):
 
@@ -163,22 +163,40 @@ def reconstruct_ftl_from_svd(U_list, S_list, Vt_list, Dlarge_modified, block_siz
     ftl_w = np.clip(ftl_w, 0, 255).astype(np.uint8)
     return ftl_w
 
+#permutation functions
 
-def embed_watermark_in_ftl(ftl, wm, block_size=8, T=5.0):
-    wm_bits = (wm // 255).astype(np.uint8)
+def _rng_from_key(key):
+    seed = abs(hash(key)) % (2**32)
+    return np.random.default_rng(seed)
 
-    U_list, S_list, Vt_list, Dlarge = svd_blocks_and_collect_Dlarge(
-        ftl, block_size, wm_bits.shape
-    )
-    Dlarge_modified = modify_Dlarge_with_watermark(Dlarge, wm_bits, T)
+def permute_watermark(wm_img, key):
+    flat = wm_img.flatten()
+    num_pixels = flat.size
 
-    ftl_w = reconstruct_ftl_from_svd(
-        U_list, S_list, Vt_list, Dlarge_modified, block_size, ftl.shape
-    )
-    return ftl_w
+    rng = _rng_from_key(key)
+    perm_indices = np.arange(num_pixels)
+    rng.shuffle(perm_indices)
 
-#  Embedding in U (U matrix of fbr)
+    perm_flat = flat[perm_indices]
+    return perm_flat.reshape(wm_img.shape)
 
+
+def depermute_watermark(wm_perm, key):
+    flat = wm_perm.flatten()
+    num_pixels = flat.size
+
+    rng = _rng_from_key(key)
+    perm_indices = np.arange(num_pixels)
+    rng.shuffle(perm_indices)
+
+    inv_perm = np.zeros_like(perm_indices)
+    inv_perm[perm_indices] = np.arange(num_pixels)
+
+    original_flat = flat[inv_perm]
+    return original_flat.reshape(wm_perm.shape)
+
+
+# (8) + (9 )
 def embed_watermark_in_fbr_U(fbr, wm, block_size=8, alpha=0.1):
     H = fbr.shape[0]
 
@@ -324,14 +342,11 @@ if __name__ == "__main__":
     # ---- INPUT FILES ----
     host_path = "picture.png"
     wm_path   = "ivan.png"
-    secret_key = "my_secret_key_123"  # used for permutation
-
-    # ---- PARAMETERS ----
+    
     block_size = 8
     T = 5.0
     alpha = 0.1
 
-    # ---- LOAD IMAGES ----
     host = load_grayscale_image(host_path)
     wm_original = load_grayscale_image(wm_path)
 
@@ -350,17 +365,14 @@ if __name__ == "__main__":
     )
     wm_resized = np.array(wm_resized_img)
 
-    # ---- OPTIONAL: PERMUTE WATERMARK ----
     wm_perm = permute_watermark(wm_resized, secret_key)
 
-    # ---- EMBEDDING ----
     ftl_w = embed_watermark_in_ftl(ftl, wm_perm, block_size, T=T)
     fbr_w = embed_watermark_in_fbr_U(fbr, wm_perm, block_size, alpha=alpha)
 
     watermarked_host = combine_subimages(ftl_w, ftr, fbl, fbr_w)
     save_grayscale_image(watermarked_host, "host_watermarked.png")
 
-    # ---- EXTRACTION FROM WATERMARKED IMAGE ----
     F = load_grayscale_image("host_watermarked.png")
     ftlw_ex, ftr_w_ex, fbl_w_ex, fbrw_ex = partition_host_image(F)
 
