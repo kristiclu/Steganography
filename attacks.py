@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageFilter, ImageEnhance
 
-from code2 import (
+from code2_new import (
     load_grayscale_image, save_grayscale_image,
     partition_host_image,
     permute_watermark, depermute_watermark,
