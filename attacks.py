@@ -2,6 +2,9 @@ import os
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageFilter, ImageEnhance
+from io import BytesIO
+from PIL import ImageFilter
+import shutil
 
 from code2_new import (
     load_grayscale_image, save_grayscale_image,
@@ -9,42 +12,87 @@ from code2_new import (
     permute_watermark, depermute_watermark,
     embed_watermark_in_ftl, embed_watermark_in_fbr_U,
     combine_subimages, extract_watermark_from_ftlw, extract_bits_from_fbrw_U,
-    psnr, ber, normalized_correlation,
-    attack_jpeg, attack_resize
+    psnr, ber, normalized_correlation
 )
 
 # =========================================================
-#  DODATNI NAPADI (što bliže onima iz rada)
+#  NAPADI
 # =========================================================
 
+# mislim da radi
+def attack_jpeg(img_arr, quality=30):
+    img = Image.fromarray(img_arr.astype(np.uint8))
+    buffer = BytesIO()
+    img.save(buffer, format="JPEG", quality=quality)
+    buffer.seek(0)
+    attacked = Image.open(buffer).convert("L")
+    return np.array(attacked)
+
+
+def attack_gaussian_noise(img_arr, sigma=10):
+    noise = np.random.normal(0, sigma, img_arr.shape)
+    noisy = img_arr.astype(np.float64) + noise
+    noisy = np.clip(noisy, 0, 255)
+    return noisy.astype(np.uint8)
+
+# mislim da radi
+def attack_blur(img_arr, radius=1.0):
+    img = Image.fromarray(img_arr.astype(np.uint8))
+    blurred = img.filter(ImageFilter.GaussianBlur(radius=radius))
+    return np.array(blurred)
+
+"""
+#bikubicna interpolacija, njeznija od bilinear
+def attack_resize(img_arr, scale=0.5):
+    h, w = img_arr.shape
+    img = Image.fromarray(img_arr.astype(np.uint8))
+    small = img.resize((int(w*scale), int(h*scale)), Image.BICUBIC)
+    back = small.resize((w, h), Image.BICUBIC)
+    return np.array(back)
+"""
+
+
+# na 0.5 ga ubije, veci i manje scale bolji. Ako se poveca T je bolje
+def attack_resize(img_arr, scale=0.5):
+    H, W = img_arr.shape
+    img = Image.fromarray(img_arr.astype(np.uint8))
+    new_w = max(1, int(W * scale))
+    new_h = max(1, int(H * scale))
+    small = img.resize((new_w, new_h), resample=Image.BILINEAR)
+    back = small.resize((W, H), resample=Image.BILINEAR)
+    return np.array(back)
+
+
+# mislim da radi
 def attack_rotation(img_arr, angle=20):
-    """Rotacija za 'angle' stupnjeva i nazad, s bilinearnom interpolacijom."""
     img = Image.fromarray(img_arr.astype(np.uint8))
     rot = img.rotate(angle, resample=Image.BILINEAR, expand=True)
-    rot_back = rot.rotate(-angle, resample=Image.BILINEAR, expand=True)
 
     w0, h0 = img.size
-    w1, h1 = rot_back.size
+    w1, h1 = rot.size
     left = (w1 - w0) // 2
     top = (h1 - h0) // 2
-    cropped = rot_back.crop((left, top, left + w0, top + h0))
+    cropped = rot.crop((left, top, left + w0, top + h0))
     return np.array(cropped)
 
+# mislim da radi
+def attack_rotation2(img_arr, angle=20):
+    img = Image.fromarray(img_arr.astype(np.uint8))
+    # prvi put: +angle, bez expand, bilinear, pozadina crna
+    rot = img.rotate(-angle, resample=Image.BILINEAR, expand=False, fillcolor=0)
+    # drugi put: -angle, opet bez expand
+    rot_back = rot.rotate(angle, resample=Image.BILINEAR, expand=False,fillcolor=0)
+    return np.array(rot_back)
 
+
+# ubije ga, u radu preziv D
 def attack_median_3x3(img_arr):
     """Median filter 3x3."""
     img = Image.fromarray(img_arr.astype(np.uint8))
     filt = img.filter(ImageFilter.MedianFilter(size=3))
     return np.array(filt)
 
-
-def attack_lowpass(img_arr):
-    """Niskopropusni filter (aproksimacija) – blagi Gaussian blur."""
-    img = Image.fromarray(img_arr.astype(np.uint8))
-    filt = img.filter(ImageFilter.GaussianBlur(radius=1.0))
-    return np.array(filt)
-
-
+# mislim da radi
 def attack_salt_pepper(img_arr, density=0.01):
     """Salt & pepper šum zadane gustoće."""
     out = img_arr.copy()
@@ -61,22 +109,17 @@ def attack_salt_pepper(img_arr, density=0.01):
     flat[idx[half:]] = 255
     return flat.reshape(out.shape)
 
-
+# mislim da radi
 def attack_cropping(img_arr, crop_ratio=0.25):
-    """
-    Cropping ~25% slike: odrežemo donji desni dio i
-    preostali dio skaliramo nazad na originalnu veličinu.
-    """
     H, W = img_arr.shape
-    crop_h = int(H * (1 - crop_ratio))
-    crop_w = int(W * (1 - crop_ratio))
+    out = img_arr.copy()
+    scale = np.sqrt(crop_ratio)
+    crop_h = int(H * scale)
+    crop_w = int(W * scale)
+    out[0:crop_h, 0:crop_w] = 0
+    return out
 
-    img = Image.fromarray(img_arr.astype(np.uint8))
-    cropped = img.crop((0, 0, crop_w, crop_h))
-    back = cropped.resize((W, H), Image.BICUBIC)
-    return np.array(back)
-
-
+# mislim da radi
 def attack_brightness(img_arr, factor=1.2):
     """Promjena osvjetljenja (npr. +20% => factor=1.2)."""
     img = Image.fromarray(img_arr.astype(np.uint8))
@@ -84,7 +127,7 @@ def attack_brightness(img_arr, factor=1.2):
     bright = enh.enhance(factor)
     return np.array(bright)
 
-
+# mislim da radi
 def attack_gamma(img_arr, gamma=0.9):
     """Gamma korekcija."""
     x = img_arr.astype(np.float32) / 255.0
@@ -104,8 +147,9 @@ def attack_rowcol_blanking(img_arr, step=20):
     return out
 
 
+# mislim da radi
 def attack_rowcol_copying(img_arr, step=20):
-    """Row/column copying – neke redove/stupce kopiramo iz susjednih."""
+    """Row/column copying - neke redove/stupce kopiramo iz susjednih."""
     out = img_arr.copy()
     H, W = out.shape
 
@@ -120,17 +164,10 @@ def attack_rowcol_copying(img_arr, step=20):
     return out
 
 
+# mislim da radi
 def attack_bitplane_lsb(img_arr):
-    """Bit-plane removal (LSB) – poništavamo zadnji bit."""
-    return (img_arr & 0xFE).astype(np.uint8)
-
-
-def attack_jpeg2000_like(img_arr, quality=30):
-    """
-    Aproksimacija JPEG2000 napada – koristimo jaču JPEG kompresiju.
-    (U radu je korišten JPEG2000 toolbox; ovdje ga nemamo.)
-    """
-    return attack_jpeg(img_arr, quality=quality)
+    """Bit-plane removal (LSB) - poništavamo zadnji bit."""
+    return (img_arr & 0xFe).astype(np.uint8)
 
 
 # =========================================================
@@ -209,7 +246,7 @@ def evaluate_single_attack(idx, name, attack_fn,
     ber_D = ber(wm_true_bits, wm_bits_D_dep)
     ber_U = ber(wm_true_bits, wm_bits_U_dep)
     nc_D = normalized_correlation(wm_true_bits, wm_bits_D_dep)
-    nc_U = normalized_correlation(wm_true_bits, wm_bits_U_dep)
+    nc_U = normalized_correlation(wm_true_bits, wm_bits_U_dep) 
 
     return {
         "Attack": name,
@@ -229,14 +266,19 @@ def evaluate_single_attack(idx, name, attack_fn,
 # =========================================================
 
 def run_paper_experiment(host_path, wm_path, secret_key,
-                         block_size=8, T=40, alpha=0.05,
+                         block_size=8, T=60, alpha=0.05,
                          out_dir="results_paper"):
+    
+    # 0) Očisti folder s rezultatima
+    if os.path.isdir(out_dir):
+        shutil.rmtree(out_dir)  # izbriše cijeli folder i sve u njemu
+
+    os.makedirs(out_dir, exist_ok=True)
+    
     # 1) Embed jednom
     host, wm_true_bits, wm_resized, watermarked = embed_once(
         host_path, wm_path, secret_key, block_size, T, alpha
     )
-
-    os.makedirs(out_dir, exist_ok=True)
 
     # Spremi osnovne slike: original, resized watermark, permutirani host
     save_grayscale_image(host, os.path.join(out_dir, "host_original.png"))
@@ -252,18 +294,19 @@ def run_paper_experiment(host_path, wm_path, secret_key,
     attacks = [
         ("No_attack",          lambda img: img),
         ("JPEG_Q70",           lambda img: attack_jpeg(img, quality=70)),
+        ("Gaussian_noise_10",  lambda img: attack_gaussian_noise(img, sigma=10)),
         ("Rotation_20deg",     lambda img: attack_rotation(img, angle=20)),
+        ("Rotation2_20deg",    lambda img: attack_rotation2(img, angle=20)),
         ("Resize_0.5",         lambda img: attack_resize(img, scale=0.5)),
         ("Median_3x3",         lambda img: attack_median_3x3(img)),
-        ("Lowpass_filter",     lambda img: attack_lowpass(img)),
+        ("Blur_1.0",           lambda img: attack_blur(img, radius=1.0)),
         ("SaltPepper_0.01",    lambda img: attack_salt_pepper(img, density=0.01)),
         ("Cropping_25pct",     lambda img: attack_cropping(img, crop_ratio=0.25)),
-        ("Brightness_+20pct",  lambda img: attack_brightness(img, factor=1.2)),
+        ("Brightness_20pct",   lambda img: attack_brightness(img, factor=1.2)),
         ("Gamma_0.9",          lambda img: attack_gamma(img, gamma=0.9)),
         ("RowCol_Blanking",    lambda img: attack_rowcol_blanking(img, step=20)),
         ("RowCol_Copying",     lambda img: attack_rowcol_copying(img, step=20)),
         ("Bitplane_LSB",       lambda img: attack_bitplane_lsb(img)),
-        ("JPEG2000_like",      lambda img: attack_jpeg2000_like(img, quality=30)),
     ]
 
     results = []
@@ -308,13 +351,13 @@ def run_paper_experiment(host_path, wm_path, secret_key,
 # ---------------------------------------------------------
 
 if __name__ == "__main__":
-    host_path = "picture.png"   # host (Lena-like)
-    wm_path   = "ivan.png"      # watermark
+    host_path = "picture.png"   
+    wm_path   = "ivan.png"    
     secret_key = "my_secret_key_123"
     block_size = 8
 
     # Parametri koje smo odabrali na temelju sweep-a
-    T = 40
+    T = 60.0
     alpha = 0.05
 
     run_paper_experiment(

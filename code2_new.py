@@ -39,8 +39,6 @@ def partition_host_image(host_img):
 
 # (3) + (4)
 # we are doing SVD on blocks of ftl and collecting Dlarge
-
-
 def svd_blocks_and_collect_Dlarge(ftl, block_size, wm_shape):
     H = ftl.shape[0] #number of rows
     blocks_per_dim = H // block_size 
@@ -122,8 +120,6 @@ def modify_Dlarge_with_watermark(Dlarge, wm_bits, T, dmin=None, dmax=None):
         modified_flat[i] = new_d
 
     return modified_flat.reshape(Dlarge.shape)
-
-
 
 
 def embed_watermark_in_ftl(ftl, wm, block_size=8, T=5.0):
@@ -235,14 +231,17 @@ def depermute_watermark(wm_perm, key):
 # (8) + (9)
 def embed_watermark_in_fbr_U(fbr, wm, block_size=8, alpha=0.1):
     """
-    U watermark 'U' matricu (bottom-right kvadrant) ugrađujemo bit tako da
-    kontroliramo odnos |u11| i |u21| (prva dva elementa prve kolone U).
+    U matricu U (donji desni kvadrant) ugrađujemo bit tako da
+    kontroliramo razliku |u11| - |u21|:
 
-      bit = 1  -> |u11| >= |u21| + alpha
-      bit = 0  -> |u21| >= |u11| + alpha
+        bit = 1  ->  |u11| >= |u21| + alpha
+        bit = 0  ->  |u21| >= |u11| + alpha
 
-    Pri ekstrakciji ćemo gledati samo sign(|u11| - |u21|).
+    To je u duhu rada: bit je određen usporedbom magnituda stupca U,
+    a alpha je sigurnosna margina. Ekstrakcija ostaje:
+        bit = 1 ako |u11| > |u21|, inače 0.
     """
+    
     H = fbr.shape[0]
 
     wm_bits = (wm // 255).astype(np.uint8)
@@ -267,7 +266,8 @@ def embed_watermark_in_fbr_U(fbr, wm, block_size=8, alpha=0.1):
 
                 u11 = U[0, 0]
                 u21 = U[1, 0]
-
+                
+                
                 a = abs(u11)
                 b = abs(u21)
                 diff = a - b
@@ -294,13 +294,24 @@ def embed_watermark_in_fbr_U(fbr, wm, block_size=8, alpha=0.1):
                 sign21 = 1.0 if u21 >= 0 else -1.0
                 U[0, 0] = sign11 * a_new
                 U[1, 0] = sign21 * b_new
+                
+                
+                """
+                a = abs(u11)
+                b = abs(u21)
+                u_diff = a - b
 
-                # (opcionalno) renormaliziraj prvu kolonu da ostane blizu ortonormirane
-                col = U[:, 0]
-                norm = np.linalg.norm(col)
-                if norm > 1e-8:
-                    U[:, 0] = col / norm
-
+                # implementacija jednadžbi (14) i (15)
+                if (bit == 1 and u_diff > alpha) or (bit == 0 and u_diff < alpha):
+                    # slučaj (14)
+                    U[1, 0] = -abs(b - (alpha - u_diff) / 2.0)
+                    U[0, 0] = -abs(a + (alpha - u_diff) / 2.0)
+                else:
+                    # slučaj (15)
+                    U[1, 0] = -abs(b - (alpha + u_diff) / 2.0)
+                    U[0, 0] = -abs(a + (alpha + u_diff) / 2.0)    
+                """    
+                    
             block_w = U @ np.diag(S) @ Vt
             fbr_w[y0:y0+block_size, x0:x0+block_size] = block_w
 
@@ -336,13 +347,6 @@ def svd_blocks_and_collect_D_from_ftlw(ftlw, block_size):
 
 
 def extract_bits_from_Dlarge(Dlarge, T, dmin, dmax):
-    """
-    Inverzna operacija modifikacije iz 'modify_Dlarge_with_watermark'.
-    Za svaki D(1,1) element tražimo u kojem je binu te provjeravamo
-    je li u Range1 ili Range2:
-      - ako je u Range1 -> bit = 1
-      - inače           -> bit = 0
-    """
     D_flat = Dlarge.flatten().astype(float)
     bits_flat = np.zeros_like(D_flat, dtype=np.uint8)
 
@@ -460,58 +464,20 @@ def normalized_correlation(wm_true, wm_extracted):
         return 0
     return num / den
 
-
-# =========================
-#  ATTACKS (JPEG, noise, blur, resize)
-# =========================
-
-from io import BytesIO
-from PIL import ImageFilter
-
-def attack_jpeg(img_arr, quality=30):
-    img = Image.fromarray(img_arr.astype(np.uint8))
-    buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=quality)
-    buffer.seek(0)
-    attacked = Image.open(buffer).convert("L")
-    return np.array(attacked)
-
-def attack_gaussian_noise(img_arr, sigma=10):
-    noise = np.random.normal(0, sigma, img_arr.shape)
-    noisy = img_arr.astype(np.float64) + noise
-    noisy = np.clip(noisy, 0, 255)
-    return noisy.astype(np.uint8)
-
-def attack_blur(img_arr, radius=1.0):
-    img = Image.fromarray(img_arr.astype(np.uint8))
-    blurred = img.filter(ImageFilter.GaussianBlur(radius=radius))
-    return np.array(blurred)
-
-def attack_resize(img_arr, scale=0.5):
-    h, w = img_arr.shape
-    img = Image.fromarray(img_arr.astype(np.uint8))
-    small = img.resize((int(w*scale), int(h*scale)), Image.BICUBIC)
-    back = small.resize((w, h), Image.BICUBIC)
-    return np.array(back)
-
-
-
 # =========================
 #  MAIN: embedding + extraction demo
 # =========================
 
 if __name__ == "__main__":
-     # -------------------------------------------------
-    #  PARAMETRI
-    # -------------------------------------------------
-    host_path   = "picture.png"    # host slika 512x512 (ili slično)
-    wm_path     = "ivan.png"       # watermark (npr. 32x32 crno-bijeli tekst)
+    #ucitavanje slika i parametri
+    host_path   = "picture.png"   
+    wm_path     = "ivan.png"       
     secret_key  = "my_secret_key_123"
     block_size  = 8
 
     # parametri embedanja (možeš ih mijenjati)
-    T     = 40.0
-    alpha = 0.05
+    T     = 60.0
+    alpha = 0.03
 
     # -------------------------------------------------
     #  1) UČITAJ I PRIPREMI
