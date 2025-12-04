@@ -19,7 +19,7 @@ from code2_new import (
 #  NAPADI
 # =========================================================
 
-# mislim da radi
+
 def attack_jpeg(img_arr, quality=30):
     img = Image.fromarray(img_arr.astype(np.uint8))
     buffer = BytesIO()
@@ -35,7 +35,7 @@ def attack_gaussian_noise(img_arr, sigma=10):
     noisy = np.clip(noisy, 0, 255)
     return noisy.astype(np.uint8)
 
-# mislim da radi
+
 def attack_blur(img_arr, radius=1.0):
     img = Image.fromarray(img_arr.astype(np.uint8))
     blurred = img.filter(ImageFilter.GaussianBlur(radius=radius))
@@ -63,7 +63,7 @@ def attack_resize(img_arr, scale=0.5):
     return np.array(back)
 
 
-# mislim da radi
+
 def attack_rotation(img_arr, angle=20):
     img = Image.fromarray(img_arr.astype(np.uint8))
     rot = img.rotate(angle, resample=Image.BILINEAR, expand=True)
@@ -75,7 +75,7 @@ def attack_rotation(img_arr, angle=20):
     cropped = rot.crop((left, top, left + w0, top + h0))
     return np.array(cropped)
 
-# mislim da radi
+
 def attack_rotation2(img_arr, angle=20):
     img = Image.fromarray(img_arr.astype(np.uint8))
     # prvi put: +angle, bez expand, bilinear, pozadina crna
@@ -85,14 +85,14 @@ def attack_rotation2(img_arr, angle=20):
     return np.array(rot_back)
 
 
-# ubije ga, u radu preziv D
+
 def attack_median_3x3(img_arr):
     """Median filter 3x3."""
     img = Image.fromarray(img_arr.astype(np.uint8))
     filt = img.filter(ImageFilter.MedianFilter(size=3))
     return np.array(filt)
 
-# mislim da radi
+
 def attack_salt_pepper(img_arr, density=0.01):
     """Salt & pepper šum zadane gustoće."""
     out = img_arr.copy()
@@ -109,7 +109,7 @@ def attack_salt_pepper(img_arr, density=0.01):
     flat[idx[half:]] = 255
     return flat.reshape(out.shape)
 
-# mislim da radi
+
 def attack_cropping(img_arr, crop_ratio=0.25):
     H, W = img_arr.shape
     out = img_arr.copy()
@@ -119,7 +119,7 @@ def attack_cropping(img_arr, crop_ratio=0.25):
     out[0:crop_h, 0:crop_w] = 0
     return out
 
-# mislim da radi
+
 def attack_brightness(img_arr, factor=1.2):
     """Promjena osvjetljenja (npr. +20% => factor=1.2)."""
     img = Image.fromarray(img_arr.astype(np.uint8))
@@ -127,7 +127,7 @@ def attack_brightness(img_arr, factor=1.2):
     bright = enh.enhance(factor)
     return np.array(bright)
 
-# mislim da radi
+
 def attack_gamma(img_arr, gamma=0.9):
     """Gamma korekcija."""
     x = img_arr.astype(np.float32) / 255.0
@@ -147,7 +147,7 @@ def attack_rowcol_blanking(img_arr, step=20):
     return out
 
 
-# mislim da radi
+
 def attack_rowcol_copying(img_arr, step=20):
     """Row/column copying - neke redove/stupce kopiramo iz susjednih."""
     out = img_arr.copy()
@@ -164,7 +164,7 @@ def attack_rowcol_copying(img_arr, step=20):
     return out
 
 
-# mislim da radi
+
 def attack_bitplane_lsb(img_arr):
     """Bit-plane removal (LSB) - poništavamo zadnji bit."""
     return (img_arr & 0xFe).astype(np.uint8)
@@ -329,7 +329,7 @@ def run_paper_experiment(host_path, wm_path, secret_key,
     csv_path = os.path.join(out_dir, "paper_attacks_results.csv")
     df.to_csv(csv_path, sep=";", index=False, float_format="%.3f")
 
-    # 4) Lijepi ispis (kao u radu – PSNR + (NC, BER) po grani)
+    # 4) Lijepi ispis (PSNR + (NC, BER) po grani)
     print("====================================================")
     print("REZULTATI NAPADA (PSNR + NC/BER iz D i U grane)")
     print("====================================================\n")
@@ -366,3 +366,4 @@ if __name__ == "__main__":
         T=T, alpha=alpha,
         out_dir="results_paper"
     )
+
