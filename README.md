@@ -1,1 +1,1 @@
-Repozirotij za projekt Steganografija iz MITMAP. Glavni dio koda koji radi data loading, embedanje i ekstrakciju je u main_code. Skripta sa napadima je attacks.py dok su izbor parametara napravljen u parameter_experiment.py
+Repozirotij za projekt Steganografija iz MITMAP. Glavni dio koda koji radi data loading, embedanje i ekstrakciju je u main_code. Skripta sa napadima je attacks.py dok je izbor parametara napravljen u parameter_experiment.py
